@@ -232,6 +232,12 @@ def main():
 
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
+        if a.dry_run:
+            # dry-run 的意义是「不碰远端，先看会做什么」，所以不该要令牌。
+            print("DRY  无令牌，只做本地检查（真发布会先校验令牌与账号）")
+            print("DRY  将发布 %s 到 %s/%s（版本 %s，远端 %s）"
+                  % (PKG.name, "<你的账号>", a.repo, read_version(), a.remote or "https 默认地址"))
+            return
         die("没有令牌。设置环境变量 GH_TOKEN 后重跑；令牌只在内存里用，不写入任何文件。")
 
     # 1. 令牌与账号
@@ -304,9 +310,10 @@ def tag_release(owner, repo, token, url, tag, desc, auth=None):
     if any(t.get("name") == tag for t in (tags if isinstance(tags, list) else [])):
         return
     exe = git_exe() or "git"
-    subprocess.run([exe, "tag", "-f", tag], cwd=str(PKG), check=False)
+    # 不 --force：上面已确认远端没有这个标签；强推会被本机硬闸门拦（会覆盖远端历史）。
+    subprocess.run([exe, "tag", tag], cwd=str(PKG), check=False)
     tag_url = url.replace("https://", "https://x-access-token:" + auth + "@") if auth else url
-    subprocess.run([exe, "push", tag_url, tag, "--force"],
+    subprocess.run([exe, "push", tag_url, tag],
                    cwd=str(PKG), capture_output=True, text=True, timeout=120)
     git("remote", "set-url", "origin", url)
     st3, rel = api("/repos/%s/%s/releases" % (owner, repo), "POST", token=token,

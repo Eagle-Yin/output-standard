@@ -1,16 +1,19 @@
-"""发布路径实测：两段验法，各自说清能验到什么。
+"""发布路径实测：三段验法，各自说清能验到什么。
 
 A 段（任何机器都跑）：用假 git 记录命令，验分支逻辑——先 force-with-lease、
    失败退回普通 push、令牌只出现在命令行、推完立刻把带令牌地址换回干净地址、
    输出里令牌被打码。这段不依赖本机有没有 git。
 B 段（本机有能被子进程拉起的 git 时才跑）：真造一个裸仓库当远端，真推一次、
    再推一次，确认远端真拿到提交。找不到可用的 git 时明确打 SKIP 并给原因，不假装通过。
+C 段：无令牌跑 --dry-run，必须放行并说清会发布什么——「先看会做什么」这个用途
+   本身不该要凭据，缺令牌就拦属于自相矛盾。
 
 为什么两段要分开：这台机器的 PATH 上第一个 git 是商店版执行别名，装在受保护的
 WindowsApps 目录，子进程拉起会被拒绝访问（实测 WinError 5），而命令行里同一个
 "git" 跑得好好的。同一台机器另有一份独立安装能跑——所以「用哪个 git」必须真试
 （publish.git_exe），逻辑测试则不该依赖这件事。
 """
+import os
 import shutil
 import subprocess
 import sys
@@ -110,9 +113,21 @@ def part_b():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def part_c():
+    # dry-run 不该要令牌：它的意义是「不碰远端先看会做什么」，缺令牌还拦就是自相矛盾
+    env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
+    p = subprocess.run([sys.executable, str(ROOT / "publish.py"), "--dry-run"],
+                       cwd=str(ROOT), capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", env=env, timeout=120)
+    check("无令牌 dry-run 也放行", p.returncode == 0, (p.stdout + p.stderr)[-160:])
+    check("dry-run 说清会发布什么", "DRY" in p.stdout and publish.read_version() in p.stdout,
+          p.stdout[-160:])
+
+
 def main():
     part_a()
     part_b()
+    part_c()
     for line in oks:
         print("ok   " + line)
     for line in skips:
