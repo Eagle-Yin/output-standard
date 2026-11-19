@@ -23,6 +23,7 @@ python tests/test_looks.py       # 版式判据 9 例
 python tests/test_reply_hits.py  # 全量回归 71 例
 python tests/test_portable.py    # 脱离环境也能跑
 python tests/test_loop.py        # 闭环：病稿被拦 → 按指引改写 → 复判放行
+python tests/test_second_machine.py  # 第二台机器：空环境、无 .git、无本机变量也能判别
 ```
 
 当判据用：
