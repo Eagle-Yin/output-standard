@@ -249,6 +249,15 @@ PROCESS_NOISE_RE = re.compile(
 )
 LBL_PROCESS = "正文混入过程播报"
 
+# ── 「必须知道的事实」这类抽屉（2026-11-19 兵哥明令取消）──────
+# 这个小节本来是为了让限制别藏在段落里。实际用法跑偏了：正文写「已修好」，
+# 抽屉里躺着「其实没做成」，读者以为已经好了。未做完的事只有两种写法——
+# 能做的当场做完，真做不了的写进结论并说清谁在何时做。
+HIDING_RE = re.compile(
+    r"(?m)^#{1,4}\s*(?:[^\n]{0,4})?(?:必须知道的事实|须知|注意事项|提示事项|补充说明)"
+    r"|^\s*(?:[-*]\s*)?\*\*(?:必须知道的事实|须知|注意事项)\*\*")
+LBL_HIDING = "用「必须知道的事实」类小节藏未完成项"
+
 # ════════════════════════════════════════════════════════════
 #  判定主体
 # ════════════════════════════════════════════════════════════
@@ -393,6 +402,8 @@ def _check_readability(text: str, core: str) -> list:
         hits.append(LBL_SLOP)
     if PROCESS_NOISE_RE.search(core):
         hits.append(LBL_PROCESS)
+    if HIDING_RE.search(core):
+        hits.append(LBL_HIDING)
     return hits
 
 
