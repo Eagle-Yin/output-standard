@@ -1,0 +1,29 @@
+name: release
+
+# 打标签就自动建 Release。以前这件事要人拿个人令牌手工调接口，
+# 令牌过期、权限缺项都会让「代码推上去了但 Release 没建」悄悄发生。
+# 用仓库自带的 GITHUB_TOKEN，不需要任何个人凭据。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 取本版 CHANGELOG 段落当 Release 说明
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          awk -v t="## $tag" 'index($0,t)==1{f=1;next} f&&/^## /{exit} f' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "见 CHANGELOG.md" > notes.md
+      - name: 建 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md
