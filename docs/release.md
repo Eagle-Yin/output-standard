@@ -47,11 +47,36 @@ python publish.py                # 真发：建公开仓库 → 推主线 → �
 
 **令牌安全**：只出现在一条命令的地址里，推完立刻把远端地址换回不带令牌的形式；任何输出里的令牌都替换成 `[REDACTED]`。
 
-## 需要人做的那一件
+## 需要人做的那一件：申请令牌（照着点就行）
 
-1. 打开 GitHub → Settings → Developer settings → Personal access tokens。
-2. 生成 token，勾 `repo`（经典令牌）或给目标仓库 `Contents: Read and write` + `Administration: Read and write`（细粒度令牌）。
-3. 把 token 交给执行者，或自己设进环境变量。
+生成令牌等于授权某个程序代表账号写代码，是账号持有人的决定——执行者不问、不猜、不代填。三条路选一条（界面入口若挪了，在 GitHub 顶部搜索 personal access tokens 即达）：
+
+**路线 A：细粒度令牌（推荐，权限最小、自带过期）**
+
+1. 浏览器登录 github.com → 右上角头像 → **Settings**。
+2. 左栏拉到最底 → **Developer settings**。
+3. **Personal access tokens → Fine-grained tokens** → **Generate new token**。
+4. **Token name** 随意（建议 output-standard-publish）；**Expiration** 选 7 天——发完即弃，不用回头清理。
+5. **Resource owner** 选自己的账号；**Repository access** 选 **All repositories**（仓库由脚本新建，发令牌时它还不存在，选不了单个仓库）。
+6. **Permissions → Repository permissions** 只勾两项：**Administration: Read and write**（建仓库用）、**Contents: Read and write**（推代码用）。其余一概不勾。
+7. **Generate token** 后复制以 `github_pat_` 开头的一串——只显示这一次，当场复制。
+
+**路线 B：经典令牌（最快）**
+
+1. 同上进入 Developer settings → **Tokens (classic)** → **Generate new token (classic)**。
+2. **Note** 随意、**Expiration** 选 7 天、只勾 **repo** 一项，其余不勾。
+3. Generate 后复制以 `ghp_` 开头的一串。
+
+**路线 C：设备码登录（令牌不进聊天窗口）**
+
+1. 对执行者说一句「走设备码」。
+2. 执行者起登录流程，屏幕给出一串 8 位码和网址。
+3. 浏览器打开 github.com/login/device → 输码 → 点授权，结束。
+
+**怎么交、怎么处置**：
+
+- 令牌贴在对话里交给执行者（会留在聊天记录），所以选 7 天期；发布完当天回到第 3 步的令牌列表页，点该令牌的 **Delete/Revoke** 撤销。
+- 交令牌时带一句仓库名；不说就按默认 `output-standard`——挂在你的账号下、公开仓库。
 
 **为什么这一步只能人做**：生成 token 等于授权某个程序代表账号写代码，是账号持有人的决定。执行者不问、不猜、不代填。
 
