@@ -20,10 +20,12 @@
 git clone <this-repo> && cd output-standard
 python tests/smoke.py            # 判据自检
 python tests/test_looks.py       # 版式判据 9 例
-python tests/test_reply_hits.py  # 全量回归 71 例
+python tests/test_reply_hits.py  # 全量回归：每条判据的「该拦」与「该放」两侧
 python tests/test_portable.py    # 脱离环境也能跑
 python tests/test_loop.py        # 闭环：病稿被拦 → 按指引改写 → 复判放行
 python tests/test_second_machine.py  # 第二台机器：空环境、无 .git、无本机变量也能判别
+python tests/test_doc_truth.py   # 文档真值：文档里的数字与代码对得上
+python tests/test_publish_path.py    # 发布路径：推送分支逻辑（无 git 的机器也能验）
 ```
 
 当判据用：
@@ -52,6 +54,15 @@ for h in hits:
 - 只处理纯文本，不认渲染结果。表格在 Markdown 里算表格，在纯文本里就是一行竖线——所以横幅用引用块而不是图片。
 - 中文为主。英文长句的段落阈值没有实测数据支撑。
 - 判据本身也需要回归：改一条正则就可能误伤历史用例，请每次都跑 `test_reply_hits.py`。
+
+## 文档地图
+
+| 文件 | 讲什么 | 什么时候读 |
+|---|---|---|
+| `docs/product-doc.md` | 产品设计：六类失效、需求与来源、三层五事件两闭环、差距分析 | 想改产品方向时 |
+| `docs/design-language.md` | 设计语言：文字七条、视觉三档、代码八条 | 动手写之前 |
+| `docs/release.md` | 上线清单：本地提交／已推送／远端可见三种状态 | 发布之前 |
+| `CONTRIBUTING.md` | 加判据的四步、加功能前的三问 | 提 PR 之前 |
 
 ## 出处
 

@@ -10,6 +10,7 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -56,6 +57,40 @@ def git(*args, check=True):
     return (p.stdout or "").strip()
 
 
+def read_version():
+    """从 judge/__init__.py 读版本号——版本只写一处。"""
+    text = (PKG / "judge" / "__init__.py").read_text(encoding="utf-8")
+    m = re.search(r'__version__\s*=\s*"([^"]+)"', text)
+    if not m:
+        die("judge/__init__.py 里找不到 __version__")
+    return m.group(1)
+
+
+def push_branch(package_dir, remote_url, branch, token=None, runner=None):
+    """把本地分支推到远端；token 只在这一句里出现，推完立刻用干净地址覆盖。
+
+    返回 (ok, 输出)。远端不存在分支时退回普通 push —— 首次推送就是这种情况。
+    runner 可注入（测试用假 git 验分支逻辑，不依赖本机有没有 git）。
+    """
+    run = runner or subprocess.run
+    url = remote_url
+    if token:
+        url = remote_url.replace("https://", "https://x-access-token:%s@" % token)
+    head = ["git", "push", url, "%s:%s" % (branch, branch)]
+    p = run(head + ["--force-with-lease"], cwd=str(package_dir),
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if p.returncode != 0:
+        p = run(head, cwd=str(package_dir),
+                capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if token:  # 令牌不留在配置里
+        run(["git", "remote", "set-url", "origin", remote_url],
+            cwd=str(package_dir), capture_output=True)
+    out = ((p.stderr or "") + (p.stdout or "")).strip()
+    if token:
+        out = out.replace(token, "[REDACTED]")
+    return p.returncode == 0, out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=PKG.name)
@@ -100,26 +135,19 @@ def main():
         git("remote", "set-url", "origin", url)
     else:
         git("remote", "add", "origin", url)
-    push_url = url.replace("https://", "https://x-access-token:%s@" % token)
-    p = subprocess.run(["git", "push", push_url, "%s:%s" % (branch, branch), "--force-with-lease"],
-                       cwd=str(PKG), capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
-    if p.returncode != 0:
-        # 首次推送没有远端分支，--force-with-lease 会失败，退回普通 push
-        p = subprocess.run(["git", "push", push_url, "%s:%s" % (branch, branch)],
-                           cwd=str(PKG), capture_output=True, text=True,
-                           encoding="utf-8", errors="replace")
-    git("remote", "set-url", "origin", url)  # 立刻抹掉带令牌的地址
-    if p.returncode != 0:
-        die("推送失败：" + ((p.stderr or p.stdout).strip()[:400]).replace(token, "[REDACTED]"))
+    ok, out = push_branch(PKG, url, branch, token=token)
+    git("remote", "set-url", "origin", url)  # 双保险：令牌绝不留在配置里
+    if not ok:
+        die("推送失败：" + out[:400])
     print("OK   已推送 %s 分支" % branch)
 
-    # 5. 版本标签与 Release
-    version = "0.1.0"
+    # 5. 版本标签与 Release（版本号取自 judge/__init__.py，唯一事实源）
+    version = read_version()
     st, tags = api("/repos/%s/%s/tags" % (owner, a.repo), token=token)
     if not any(t.get("name") == "v" + version for t in (tags if isinstance(tags, list) else [])):
         subprocess.run(["git", "tag", "-f", "v" + version], cwd=str(PKG), check=False)
-        subprocess.run(["git", "push", push_url, "v" + version, "--force"],
+        tag_url = url.replace("https://", "https://x-access-token:%s@" % token)
+        subprocess.run(["git", "push", tag_url, "v" + version, "--force"],
                        cwd=str(PKG), capture_output=True, text=True)
         git("remote", "set-url", "origin", url)
         st3, rel = api("/repos/%s/%s/releases" % (owner, a.repo), "POST", token=token,

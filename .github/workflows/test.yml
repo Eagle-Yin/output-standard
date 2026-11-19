@@ -1,0 +1,37 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  judge:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: 判据自检
+        run: python tests/smoke.py
+      - name: 全量回归（该拦 / 该放）
+        run: python tests/test_reply_hits.py
+      - name: 版式判据
+        run: python tests/test_looks.py
+      - name: 闭环仿真
+        run: python tests/test_loop.py
+      - name: 可移植
+        run: python tests/test_portable.py
+      - name: 第二台机器（空环境）
+        run: python tests/test_second_machine.py
+      - name: 文档真值
+        run: python tests/test_doc_truth.py
+      - name: 发布路径
+        run: python tests/test_publish_path.py
