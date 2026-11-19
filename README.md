@@ -26,6 +26,7 @@ python tests/test_loop.py        # 闭环：病稿被拦 → 按指引改写 →
 python tests/test_second_machine.py  # 第二台机器：空环境、无 .git、无本机变量也能判别
 python tests/test_doc_truth.py   # 文档真值：文档里的数字与代码对得上
 python tests/test_publish_path.py    # 发布路径：推送分支逻辑（无 git 的机器也能验）
+python tests/test_publish_api.py     # 发布路径：绕开 git 直连接口那条车道（假接口验请求形状与回读核对）
 ```
 
 当判据用：

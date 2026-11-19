@@ -444,9 +444,16 @@ def _check_looks(text: str) -> list:
         return []
     hits = []
 
-    # 横幅：正式成稿第一行就该能被一眼认出。已在最前面才算，藏在中间的当没写。
+    # 横幅：只盖在「成篇」的最终稿上。过程稿、半成品、追问草稿挂横幅，
+    # 等于把草稿盖成终稿——兵哥 2026-11-19：「只有最后一个通过审查的才增加，
+    # 否则如何确定哪个是最终的回复？」
+    has_foot = "铁律质检" in text and bool(re.search(r"(?m)^\s*---\s*$", text))
+    has_concl = bool(re.search(r"(?m)^#{0,4}\s*🎯", text))
     if not BANNER_OK_RE.match(text):
-        hits.append(LBL_NOBANNER)
+        if has_foot and has_concl:          # 成篇却没横幅，才是真缺
+            hits.append(LBL_NOBANNER)
+    elif not (has_foot and has_concl):
+        hits.append("横幅盖在过程稿上")      # 有横幅却不成篇：草稿被盖了章
     # 横幅只盖最终那一份：重复出现就是「两份都说是终稿」，读者没法判断哪份算数
     if len(BANNER_ANY_RE.findall(text)) > 1:
         hits.append("横幅重复出现")
