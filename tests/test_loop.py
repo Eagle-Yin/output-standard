@@ -16,7 +16,9 @@ import sys
 from pathlib import Path
 
 H = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("rr", H / "judge" / "reply_rules.py")
+# 本包把判据放在 judge/；开发树里在 iron/。两处都认，免得换目录就报 FileNotFound。
+_rr = next(p for p in (H / "judge" / "reply_rules.py", H / "iron" / "reply_rules.py") if p.exists())
+spec = importlib.util.spec_from_file_location("rr", _rr)
 rr = importlib.util.module_from_spec(spec)
 sys.modules["rr"] = rr
 spec.loader.exec_module(rr)

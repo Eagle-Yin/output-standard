@@ -161,10 +161,15 @@ ROLLBACK_RE = re.compile(r"回滚|回退|灾备|备份|恢复原样|退回原状
 # 整行匹配，避免「策略」「战略」误命中。
 PLACEHOLDER_RE = re.compile(
     r"(?m)^[ \t>*-]*(?:见上文|同上|此处省略|（略）|略|自行查看|按需补充)[。；.]?[ \t]*$")
+# 模板占位符照抄：真模型实测会把「x/100」「0.xx」原样搬进注脚，
+# 读者看到的是一个没填的表单。数字栏位必须是真数字。
+FILLED_RE = re.compile(r"（\s*\d+\s*/\s*100\s*[，,]\s*置信度\s*0?\.\d+\s*）")
+PLACEHOLDER_NUM_RE = re.compile(r"[xX]\s*/\s*100|置信度\s*0?\.[xX]+|score\s*[xX]")
 
 LBL_POINTING = "指路式交付未自含"
 LBL_ROLLBACK = "落地未给回滚与灾备"
 LBL_PLACE = "敷衍占位"
+LBL_FILL = "评分栏位未填"
 
 # ════════════════════════════════════════════════════════════
 #  六、可读性判据：去 AI 味、禁过程播报
@@ -276,6 +281,13 @@ def units(text: str) -> list:
 
 def claim_offenders(text: str) -> list:
     """有完成类断言、但同一单元内没有坐标的那些单元（返回截断串，便于指认）。"""
+    # 横幅是程序盖的章（「审查已通过，以下是正文」），不是人写的完成断言。
+    # 必须整行摘掉——只摘匹配到的那半句，剩下的「，以下正式回复**」会变成
+    # 一句无坐标的完成断言，判据自己把新版式判死（沙箱实测过）。
+    head = BANNER_OK_RE.match(text)
+    if head:
+        nl = text.find("\n", head.end())
+        text = text[nl + 1:] if nl >= 0 else ""
     bad = []
     for u in units(text):
         if CLAIM_RE.search(_strip_quotes(u)) and not TRACE_RE.search(u):
@@ -353,7 +365,7 @@ def _check_wording(core: str, text: str) -> list:
 def _check_delivery(core: str, text: str) -> list:
     """③ 交付：别让读者自己去找、别省略成占位、说了已部署就得给回滚。"""
     hits = []
-    if PLACEHOLDER_RE.search(text or ""):
+    if PLACEHOLDER_RE.search(text or "") or PLACEHOLDER_NUM_RE.search(text or ""):
         hits.append(LBL_PLACE)
     if POINTING_RE.search(core) and "MEDIA:" not in (text or "") \
             and not re.search(r"[A-Za-z]:[\\/]", text or ""):
@@ -480,12 +492,9 @@ def review(text: str, numcheck=None) -> list:
     """
     if not (text or "").strip():
         return []
-    # 横幅是程序盖的章（「审查已通过，以下是正文」），不是人写的完成断言。
-    # 不摘掉它，它会自己触发「完成类断言无本轮输出」——判据必须只审正文。
+    # 横幅整行摘掉再判：它剩下的半句会被当成无坐标的完成断言（沙箱实测过）。
     head = BANNER_OK_RE.match(text)
     if head:
-        # 横幅整行摘掉，不是只摘匹配到的那半句——剩下的「，以下正式回复**」
-        # 会变成一句无坐标的完成断言，判据自己把自己判死（沙箱实测过）。
         nl = text.find("\n", head.end())
         body = text[nl + 1:] if nl >= 0 else ""
     else:

@@ -7,8 +7,8 @@ import os
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("_judge", HERE / "judge" / "reply_rules.py")
+HERE = Path(__file__).resolve().parent
+spec = importlib.util.spec_from_file_location("_judge", HERE.parent / "judge" / "reply_rules.py")
 ih = importlib.util.module_from_spec(spec)
 sys.modules["_judge"] = ih
 spec.loader.exec_module(ih)
@@ -78,7 +78,7 @@ CASES = [
      "---\n⚠️ **铁律自检（自动追加）**：本回复命中", True, "机器横幅污染正文"),
     # 说人话 3W5H（2026-11-18 兵哥定）：结论节拿技术符号当解释 = 没解释
     ("3W5H·结论是日志搬运", "### 🎯 结论\nstatus=failed，2026-11-18T09:01:23 → 10:01:24，"
-     "Script timed out after 3600s: /opt/jobs/kb_daily_job.py；"
+     "Script timed out after 3600s: /srv/app/scripts/kb_daily_job.py；"
      "executions.db 里 cron.script_timeout_seconds 已改 7200，exit=1 不再出现。\n### 📌 要点\n"
      + "- 说明若干\n" * 40
      + "\n---\n> **🔍 铁律质检**　通过（90/100，置信度 0.9）\n", True, "结论用日志搬运代替人话"),
@@ -93,7 +93,7 @@ CASES = [
     ("裸断言词后接句读仍拦", "全部跑通了；三处都对上了。", True, "完成类断言无本轮输出"),
     # 输出规范·落地与美学三条（2026-11-18 归并进判据库；两侧用例都补，防误删与误拦）
     ("指路式交付·无坐标", "已经修好了，详见附件报告，你可以自己看一下。", True, "指路式交付未自含"),
-    ("指路式交付·有绝对路径放行", "修好了，详见 /opt/notes/x.md，`exit=0`。", False, None),
+    ("指路式交付·有绝对路径放行", "修好了，详见 /srv/app/notes/x.md，`exit=0`。", False, None),
     ("落地·已部署无回滚", "新机制已部署到生产，旧的已替换。", True, "落地未给回滚与灾备"),
     ("落地·已部署带回滚放行", "新机制已部署；出问题回滚到 config.yaml.bak-20261118，`exit=0`。", False, None),
     ("敷衍占位行", "### 🎯 结论\n看下面。\n### 📌 要点\n略。\n", True, "敷衍占位"),
@@ -116,6 +116,10 @@ CASES = [
     ("数字·算式算错必须抓", "预算 =10*3= 31 字符。", True, "数字无依据或算式不复算"),
     ("数字·带锚点放行", "实测占比 2.1%（见 iron/preflight.py:2665）。", False, None),
     ("数字·普通计数不管", "共 21 条原始要求，均在 gap-done.json 里登记。", False, None),
+    # 模板占位符照抄：真模型（本地 30B）实测会把 x/100、0.xx 原样搬进注脚
+    ("占位·评分栏位照抄模板", "> **🔍 铁律质检**　通过（x/100，置信度 0.xx）", True, "敷衍占位"),
+    ("占位·置信度只写 0.xx", "> **🔍 铁律质检**　通过（93/100，置信度 0.xx）", True, "敷衍占位"),
+    ("占位·填了真数字放行", "> **🔍 铁律质检**　通过（93/100，置信度 0.92）", False, None),
 ]
 
 def main() -> int:
