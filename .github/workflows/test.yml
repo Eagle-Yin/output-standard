@@ -2,7 +2,7 @@ name: test
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
   workflow_dispatch:
 
@@ -35,3 +35,5 @@ jobs:
         run: python tests/test_doc_truth.py
       - name: 发布路径
         run: python tests/test_publish_path.py
+      - name: 发布路径（接口车道）
+        run: python tests/test_publish_api.py

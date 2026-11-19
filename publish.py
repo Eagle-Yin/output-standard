@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -50,8 +51,29 @@ def api(path, method="GET", token=None, payload=None):
             return e.code, {"message": body[:300]}
 
 
+def git_exe():
+    """找一个真能拉起来的 git。PATH 上第一个 git 可能是商店版别名，程序里被系统拒绝（WinError 5），
+    但同机的独立安装能跑——所以逐个试，返回第一个能响应 --version 的，全不行返回 None。"""
+    seen, cands = set(), []
+    for c in [shutil.which("git"), os.path.expandvars(r"%LOCALAPPDATA%\hermes\git\cmd\git.exe"),
+              r"C:\Program Files\Git\cmd\git.exe"]:
+        if c and c not in seen:
+            seen.add(c)
+            cands.append(c)
+    for c in cands:
+        try:
+            if subprocess.run([c, "--version"], capture_output=True, timeout=20).returncode == 0:
+                return c
+        except Exception:
+            continue
+    return None
+
+
 def git(*args, check=True):
-    p = subprocess.run(["git", *args], cwd=str(PKG), capture_output=True, text=True,
+    exe = git_exe()
+    if not exe:
+        die("本机找不到能运行的 git")
+    p = subprocess.run([exe, *args], cwd=str(PKG), capture_output=True, text=True,
                        encoding="utf-8", errors="replace")
     if check and p.returncode != 0:
         die("git %s -> %s" % (" ".join(args), (p.stderr or p.stdout).strip()[:300]))
@@ -59,11 +81,8 @@ def git(*args, check=True):
 
 
 def git_available():
-    """本机能否真正拉起 git 进程。有些机器上程序被拦（实测 WinError 5），命令行里却正常。"""
-    try:
-        return subprocess.run(["git", "--version"], capture_output=True, timeout=20).returncode == 0
-    except Exception:
-        return False
+    """本机能否真正拉起 git 进程——真跑一次 --version，不猜。"""
+    return git_exe() is not None
 
 
 def read_version():
@@ -160,6 +179,12 @@ def push_via_api(owner, repo, token, desc, branch, tag):
     return ok, note
 
 
+class FakeResult:
+    """推送超时时用的替身结果：与 subprocess 返回值同形，好让上层照常判断失败。"""
+    def __init__(self, returncode, stdout, stderr):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
 def push_branch(package_dir, remote_url, branch, token=None, runner=None):
     """把本地分支推到远端；token 只在这一句里出现，推完立刻用干净地址覆盖。
 
@@ -167,17 +192,27 @@ def push_branch(package_dir, remote_url, branch, token=None, runner=None):
     runner 可注入（测试用假 git 验分支逻辑，不依赖本机有没有 git）。
     """
     run = runner or subprocess.run
+    exe = git_exe() or "git"
     url = remote_url
     if token:
         url = remote_url.replace("https://", "https://x-access-token:" + token + "@")
-    head = ["git", "push", url, "%s:%s" % (branch, branch)]
-    p = run(head + ["--force-with-lease"], cwd=str(package_dir),
-            capture_output=True, text=True, encoding="utf-8", errors="replace")
+    head = [exe, "push", url, "%s:%s" % (branch, branch)]
+
+    def call(cmd):
+        # 超时必须设：某些网络到 github.com 的 https 会静默挂 5 分钟，
+        # 不设超时就是让整条发布卡死，用户看不出在等什么。shortcut: 120s 够一次推，
+        # 仓库特别大（>1GB）时改大。
+        try:
+            return run(cmd, cwd=str(package_dir), capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=120)
+        except subprocess.TimeoutExpired:
+            return FakeResult(124, "", "推送超时（120s），网络不通或需要认证")
+
+    p = call(head + ["--force-with-lease"])
     if p.returncode != 0:
-        p = run(head, cwd=str(package_dir),
-                capture_output=True, text=True, encoding="utf-8", errors="replace")
+        p = call(head)
     if token:  # 令牌不留在配置里
-        run(["git", "remote", "set-url", "origin", remote_url],
+        run([exe, "remote", "set-url", "origin", remote_url],
             cwd=str(package_dir), capture_output=True)
     out = ((p.stderr or "") + (p.stdout or "")).strip()
     if token:
@@ -190,6 +225,9 @@ def main():
     ap.add_argument("--repo", default=PKG.name)
     ap.add_argument("--desc", default="把「输出规范」变成可执行的回复判据：七组检查 + 三套回归 + 闭环仿真")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--remote", default=os.environ.get("PUBLISH_REMOTE", ""),
+                    help="推送地址；默认用仓库的 https 地址。https 到 github 不通的机器上，"
+                         "填 git@ssh.github.com:用户/仓库.git 走 443 端口 SSH")
     a = ap.parse_args()
 
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
@@ -218,48 +256,64 @@ def main():
     else:
         print("OK   仓库已存在，复用 %s" % repo["html_url"])
     url = repo["clone_url"]
+    # 令牌只对 https 地址有意义；给了 --remote（如 443 端口 SSH）就用它推，但标签/Release 仍走接口
+    push_url = a.remote or url
 
     version = read_version()
     tag = "v" + version
 
-    # 3. 优先用 git（有历史、可增量）；这台机器上程序拉不起 git 进程时，自动改走 REST 接口
-    if not git_available():
-        print("WARN 本机拉不起 git 进程，改走 REST 接口直推（整树快照）")
-        ok, note = push_via_api(owner, a.repo, token, a.desc, "master", tag)
-        print(("OK   " if ok else "FAIL ") + note)
-        print("\n仓库地址 https://github.com/%s/%s" % (owner, a.repo))
-        raise SystemExit(0 if ok else 1)
-
-    git("config", "user.name", me.get("name") or owner)
-    git("config", "user.email", "%s@users.noreply.github.com" % owner)
-
-    # 4. 推送：令牌只在这一句里出现，推完立刻用干净地址覆盖
-    branch = git("rev-parse", "--abbrev-ref", "HEAD") or "main"
-    if git("remote", check=False):
-        git("remote", "set-url", "origin", url)
+    # 3. 先走 git（有历史、可增量）；拉不起 git 或推不通时，改走 REST 接口（整树快照）
+    pushed = False
+    if git_available():
+        git("config", "user.name", me.get("name") or owner)
+        git("config", "user.email", "%s@users.noreply.github.com" % owner)
+        branch = git("rev-parse", "--abbrev-ref", "HEAD") or "main"
+        if git("remote", check=False):
+            git("remote", "set-url", "origin", push_url)
+        else:
+            git("remote", "add", "origin", push_url)
+        pushed, out = push_branch(PKG, push_url, branch,
+                                  token=None if a.remote else token)
+        git("remote", "set-url", "origin", push_url)  # 令牌绝不留在配置里
+        if pushed:
+            print("OK   已推送 %s 分支" % branch)
+            tag_release(owner, a.repo, token, push_url, tag, a.desc,
+                        auth=None if a.remote else token)
+        else:
+            print("WARN git 推送不通，改走 REST 接口直推：" + out[:160])
     else:
-        git("remote", "add", "origin", url)
-    ok, out = push_branch(PKG, url, branch, token=token)
-    git("remote", "set-url", "origin", url)  # 双保险：令牌绝不留在配置里
-    if not ok:
-        die("推送失败：" + out[:400])
-    print("OK   已推送 %s 分支" % branch)
+        print("WARN 本机拉不起 git 进程，改走 REST 接口直推")
 
-    # 5. 版本标签与 Release（版本号取自 judge/__init__.py，唯一事实源）
-    st, tags = api("/repos/%s/%s/tags" % (owner, a.repo), token=token)
-    if not any(t.get("name") == tag for t in (tags if isinstance(tags, list) else [])):
-        subprocess.run(["git", "tag", "-f", tag], cwd=str(PKG), check=False)
-        tag_url = url.replace("https://", "https://x-access-token:" + token + "@")
-        subprocess.run(["git", "push", tag_url, tag, "--force"],
-                       cwd=str(PKG), capture_output=True, text=True)
-        git("remote", "set-url", "origin", url)
-        st3, rel = api("/repos/%s/%s/releases" % (owner, a.repo), "POST", token=token,
-                       payload={"tag_name": tag, "name": tag,
-                                "body": a.desc, "draft": False, "prerelease": False})
-        print(("OK   Release %s" % rel.get("html_url")) if st3 in (200, 201)
-              else "WARN Release 未建（HTTP %d），代码已推到位" % st3)
+    if not pushed:
+        ok, note = push_via_api(owner, a.repo, token, a.desc,
+                                repo.get("default_branch") or "master", tag)
+        print(("OK   " if ok else "FAIL ") + note)
+        if not ok:
+            print("\n仓库地址 https://github.com/%s/%s" % (owner, a.repo))
+            raise SystemExit(1)
 
     print("\n仓库地址 https://github.com/%s/%s" % (owner, a.repo))
+
+
+def tag_release(owner, repo, token, url, tag, desc, auth=None):
+    """git 车道推完之后补标签与 Release；版本号取自 judge/__init__.py，唯一事实源。
+
+    auth 为空表示推的是 SSH 地址，标签不需要令牌；只有 https 地址才把令牌拼进 URL。
+    """
+    st, tags = api("/repos/%s/%s/tags" % (owner, repo), token=token)
+    if any(t.get("name") == tag for t in (tags if isinstance(tags, list) else [])):
+        return
+    exe = git_exe() or "git"
+    subprocess.run([exe, "tag", "-f", tag], cwd=str(PKG), check=False)
+    tag_url = url.replace("https://", "https://x-access-token:" + auth + "@") if auth else url
+    subprocess.run([exe, "push", tag_url, tag, "--force"],
+                   cwd=str(PKG), capture_output=True, text=True, timeout=120)
+    git("remote", "set-url", "origin", url)
+    st3, rel = api("/repos/%s/%s/releases" % (owner, repo), "POST", token=token,
+                   payload={"tag_name": tag, "name": tag,
+                            "body": desc, "draft": False, "prerelease": False})
+    print(("OK   Release %s" % rel.get("html_url")) if st3 in (200, 201)
+          else "WARN Release 未建（HTTP %d），代码已推到位" % st3)
 
 
 if __name__ == "__main__":

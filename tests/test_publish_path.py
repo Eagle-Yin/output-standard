@@ -3,12 +3,13 @@
 A 段（任何机器都跑）：用假 git 记录命令，验分支逻辑——先 force-with-lease、
    失败退回普通 push、令牌只出现在命令行、推完立刻把带令牌地址换回干净地址、
    输出里令牌被打码。这段不依赖本机有没有 git。
-B 段（本机 git 能被子进程拉起时才跑）：真造一个裸仓库当远端，真推一次、
-   再推一次，确认远端真拿到提交。git 起不来时明确打 SKIP 并给原因，不假装通过。
+B 段（本机有能被子进程拉起的 git 时才跑）：真造一个裸仓库当远端，真推一次、
+   再推一次，确认远端真拿到提交。找不到可用的 git 时明确打 SKIP 并给原因，不假装通过。
 
-为什么不合成一段：本机 Hermes 自带的 git 装在受保护的 WindowsApps 目录里，
-子进程拉起会被拒绝访问（实测 WinError 5），但命令行里跑得好好的。
-这不是脚本的缺陷，是这台机器的权限现实——所以逻辑必须能在没有 git 的地方验。
+为什么两段要分开：这台机器的 PATH 上第一个 git 是商店版执行别名，装在受保护的
+WindowsApps 目录，子进程拉起会被拒绝访问（实测 WinError 5），而命令行里同一个
+"git" 跑得好好的。同一台机器另有一份独立安装能跑——所以「用哪个 git」必须真试
+（publish.git_exe），逻辑测试则不该依赖这件事。
 """
 import shutil
 import subprocess
@@ -57,7 +58,7 @@ def part_a():
                                    token="ghp_fake123", runner=run)
     check("令牌进了 push 地址", any("ghp_fake123" in " ".join(c) for c in calls))
     check("推完把地址换回干净的",
-          any(c[:3] == ["git", "remote", "set-url"] and c[-1] == "https://example.com/x.git"
+          any(c[1:3] == ["remote", "set-url"] and c[-1] == "https://example.com/x.git"
               for c in calls), str(calls[-1][:3]))
 
     # 3. 输出里的令牌必须打码
@@ -74,13 +75,9 @@ def part_a():
 
 
 def part_b():
-    if shutil.which("git") is None:
-        skips.append("B 段：本机没有 git")
-        return
-    try:
-        subprocess.run(["git", "--version"], capture_output=True, check=True)
-    except Exception as e:  # noqa: BLE001  只有「起不来」这一种情况走这里
-        skips.append("B 段：git 起不来（%s: %s）" % (type(e).__name__, str(e)[:60]))
+    exe = publish.git_exe()
+    if exe is None:
+        skips.append("B 段：本机没有能被子进程拉起的 git")
         return
 
     tmp = Path(tempfile.mkdtemp(prefix="pubtest-"))
@@ -88,7 +85,7 @@ def part_b():
         bare, work = tmp / "remote.git", tmp / "work"
 
         def git(*args, **kw):
-            return subprocess.run(["git", *args], capture_output=True, text=True,
+            return subprocess.run([exe, *args], capture_output=True, text=True,
                                   encoding="utf-8", errors="replace", **kw)
 
         git("init", "--bare", "-b", "main", str(bare))
