@@ -259,6 +259,65 @@ HIDING_RE = re.compile(
 LBL_HIDING = "用「必须知道的事实」类小节藏未完成项"
 
 # ════════════════════════════════════════════════════════════
+#  七、增量判据：被打回后的重写必须是上一稿的补充完善
+#
+#  为什么要有这条：审查器只判「这一份合不合格」，不判「这一份是不是接得上」。
+#  结果是被打回后模型另写一篇——问题换了、数据换了、结论换了，读者拿到的
+#  不是「改好的那份」，而是「另一份」。兵哥 2026-11-19：「确保最后通过审查的
+#  回复必须是基于前一个回复基础上的补充完善，而不是新的、单独的、与原始问题
+#  无关的回复。」
+#
+#  判据只看两件事：上一稿立起来的事实有没有被丢掉；上一稿的数字有没有被换掉。
+#  不判措辞、不判结构——那是别的判据的活。
+# ════════════════════════════════════════════════════════════
+
+LBL_NOCONT = "未承接上一稿：与上一稿无增量关系"
+
+CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
+NUM_FACT_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:%|％|条|篇|张|个|份|字|MB|GB|ms|秒|分|小时|行|处|项|次)")
+
+
+def _bigrams(text: str) -> set:
+    """中文双字切片：比整句比对宽容，比单字比对有信息量。"""
+    out = set()
+    for run in CJK_RUN_RE.findall(text or ""):
+        for i in range(len(run) - 1):
+            out.add(run[i:i + 2])
+    return out
+
+
+def continuity(prev: str, cur: str) -> dict:
+    """上一稿 → 这一稿的承接度。
+
+    返回 {"recall": 双字覆盖率, "num_keep": 数字事实保留率, "lost": 丢掉的数字}。
+    只量「上一稿立起来的东西还在不在」，不管这一稿有没有新增——增量是应该有的。
+    """
+    p, c = _bigrams(prev), _bigrams(cur)
+    recall = len(p & c) / len(p) if p else 1.0
+    pn = NUM_FACT_RE.findall(prev or "")
+    cn = set(NUM_FACT_RE.findall(cur or ""))
+    lost = [n for n in pn if n not in cn]
+    keep = (len(pn) - len(lost)) / len(pn) if pn else 1.0
+    return {"recall": round(recall, 3), "num_keep": round(keep, 3), "lost": lost[:8]}
+
+
+# 门槛怎么定：实测两份「补写」稿 recall 0.72–0.83，一份「另写一篇」0.19。
+# 取 0.5 落在两簇中间，留出正常改写（换措辞、重排段落）的余量。
+CONT_RECALL_MIN = 0.5
+CONT_NUM_KEEP_MIN = 0.6
+
+
+def continuity_hits(prev: str, cur: str) -> list:
+    """被打回后的重写与上一稿脱钩，返回标签；接得上就返回空。"""
+    if len((prev or "").strip()) < 400 or len((cur or "").strip()) < 400:
+        return []          # 太短的不判：一句话答复本来就谈不上「承接」
+    m = continuity(prev, cur)
+    if m["recall"] < CONT_RECALL_MIN or m["num_keep"] < CONT_NUM_KEEP_MIN:
+        return [LBL_NOCONT]
+    return []
+
+
+# ════════════════════════════════════════════════════════════
 #  判定主体
 # ════════════════════════════════════════════════════════════
 
@@ -512,15 +571,17 @@ def _check_looks(text: str) -> list:
     return hits
 
 
-def review(text: str, numcheck=None) -> list:
+def review(text: str, numcheck=None, prev: str = "") -> list:
     """审一段成稿，返回不合格标签列表；空列表＝通过。
 
     幂等：同一段文本反复调用结果一致（事前退回与事后记账共用这一份，结论必须相同）。
 
     参数 numcheck 可注入（测试时给替身），正常情况自动找同目录的 numcheck.py。
+    参数 prev 是「上一版被退回的那一稿」：给了就多判一条「这一版接不接得上」。
+    不给（纯问答、首稿）就不判——首稿没有上一稿可比。
 
     七组判据各自独立、互不影响，一组挂了不会让别的组失声：
-    证据 → 数字 → 措辞 → 交付 → 可读性 → 形状 → 好看。
+    证据 → 数字 → 措辞 → 交付 → 可读性 → 形状 → 好看。给了 prev 再加增量。
     """
     if not (text or "").strip():
         return []
@@ -540,6 +601,8 @@ def review(text: str, numcheck=None) -> list:
     hits += _check_readability(body, core)
     hits += _check_shape(body)
     hits += _check_looks(text)
+    if prev:
+        hits += continuity_hits(prev, body)
     # 去重保序
     seen = set()
     return [h for h in hits if not (h in seen or seen.add(h))]
