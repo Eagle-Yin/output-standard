@@ -24,6 +24,7 @@ python tests/test_portable.py
 python tests/test_second_machine.py
 python tests/test_doc_truth.py
 python tests/test_publish_path.py
+python tests/test_publish_api.py
 ```
 
 任何一套红，都不发布——发出去的是别人要读的东西，不是自己练手的。
@@ -42,8 +43,12 @@ python publish.py                # 真发：建公开仓库 → 推主线 → �
 
 1. 用令牌换账号名，令牌无效立刻退出（不会建半个仓库）。
 2. 仓库不存在就建公开仓库，已存在就复用（**不覆盖**任何已有内容）。
-3. 推送主线：先试 `--force-with-lease`，失败退回普通 push（首次推送就是这种情况）。
+3. 推主线：先试 `--force-with-lease`，失败退回普通 push（首次推送就是这种情况）。
 4. 按 `judge/__init__.py` 的版本号打标签、建 Release。
+
+**两条车道，脚本自己选。** 有些机器上程序拉不起 git 进程（命令行里 git 却正常），这时脚本自动改走 GitHub 的 REST 接口：把文件、树、提交、引用一步步建出来，最后回读分支头核对——核不上就判失败，不报成功。代价写在明处：这条车道只能整树快照，没有历史与合并能力，适合首次发布与纯追加；日常迭代仍走 git。
+
+**工作流文件要额外权限。** `.github/workflows/` 下的文件（CI 配置）除了 `repo` 权限，还要令牌带 `workflow` 权限，缺它建树一律 404（实测）。缺权限时脚本跳过该文件、其余照发，并在输出里点名——不静默丢，也不把 404 当成功。要补这个文件，按路线 A 生成令牌时把 **Workflows: Read and write** 一起勾上。
 
 **令牌安全**：只出现在一条命令的地址里，推完立刻把远端地址换回不带令牌的形式；任何输出里的令牌都替换成 `[REDACTED]`。
 
