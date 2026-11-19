@@ -75,7 +75,7 @@ def push_branch(package_dir, remote_url, branch, token=None, runner=None):
     run = runner or subprocess.run
     url = remote_url
     if token:
-        url = remote_url.replace("https://", "https://x-access-token:%s@" % token)
+        url = remote_url.replace("https://", "https://x-access-token:" + token + "@")
     head = ["git", "push", url, "%s:%s" % (branch, branch)]
     p = run(head + ["--force-with-lease"], cwd=str(package_dir),
             capture_output=True, text=True, encoding="utf-8", errors="replace")
