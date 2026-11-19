@@ -23,7 +23,10 @@ jobs:
           tag="${GITHUB_REF_NAME#v}"
           awk -v t="## $tag" 'index($0,t)==1{f=1;next} f&&/^## /{exit} f' CHANGELOG.md > notes.md
           [ -s notes.md ] || echo "见 CHANGELOG.md" > notes.md
-      - name: 建 Release
+      - name: 建 Release（已存在则更新说明）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md
+        run: |
+          # 重新打同一个标签时 Release 已存在，create 会失败；退回 edit，让说明跟上 CHANGELOG。
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md \
+            || gh release edit "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md
