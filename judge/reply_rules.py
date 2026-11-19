@@ -144,6 +144,14 @@ PATH_RE = re.compile(
 LBL_NAY = "过程性否定未给替代路径"
 LBL_LOGDUMP = "结论用日志搬运代替人话"
 
+# 「结论里放推断」（2026-11-19 兵哥定）：结论必须是本轮实测或读到的整段事实。
+# 兵哥原话：「禁止推断：必须实测，必须沙箱实测」。推断可以留在要点/未解项，但绝不能当结论。
+# 与上面 HEDGE_RE（未验证措辞）分家、各管一处：曾因共用同名互相遮蔽，C3 判失败。
+CONCL_HEDGE_RE = re.compile(r"推断|取决于|有可能|或许|多半|大概|预计|估计|应该可以")
+LBL_HEDGE = "结论含推断"
+# 横幅只盖最终那一份成稿：一篇回复里出现两次，读者就分不清哪份是定的。
+BANNER_ANY_RE = re.compile(r"(?m)^\s*>\s*✅\s*\*\*[^\n]{0,40}(?:审查已通过|质检已通过)")
+
 # LX66 载体锚点：LX66 要求「执行中的障碍必须给替代路径」，判据就落在这两个正则上。
 # token 写在这里而不是引用位置，是因为引用位置每轮都会挪，登记册指向固定常量更稳。
 LX66 = "[LX66]"
@@ -419,6 +427,9 @@ def _check_shape(text: str) -> list:
     tech = len(LOGSYM_RE.findall(concl)) + len(re.findall(r"\b\w+\(\)", concl))
     if tech >= 3 and not HUMANWHY_RE.search(concl):
         hits.append(LBL_LOGDUMP)
+    # 结论节不许出现推断：读者拿它当事实用，推断混进去就成了假事实
+    if CONCL_HEDGE_RE.search(_strip_quotes(concl)):
+        hits.append(LBL_HEDGE)
     return hits
 
 
@@ -436,6 +447,9 @@ def _check_looks(text: str) -> list:
     # 横幅：正式成稿第一行就该能被一眼认出。已在最前面才算，藏在中间的当没写。
     if not BANNER_OK_RE.match(text):
         hits.append(LBL_NOBANNER)
+    # 横幅只盖最终那一份：重复出现就是「两份都说是终稿」，读者没法判断哪份算数
+    if len(BANNER_ANY_RE.findall(text)) > 1:
+        hits.append("横幅重复出现")
 
     # 注脚：分隔线之后那段不许有机器串（程序话留给账本，读者只该看人话）。
     m_rule = None
