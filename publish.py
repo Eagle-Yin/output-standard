@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -57,6 +58,14 @@ def git(*args, check=True):
     return (p.stdout or "").strip()
 
 
+def git_available():
+    """本机能否真正拉起 git 进程。有些机器上程序被拦（实测 WinError 5），命令行里却正常。"""
+    try:
+        return subprocess.run(["git", "--version"], capture_output=True, timeout=20).returncode == 0
+    except Exception:
+        return False
+
+
 def read_version():
     """从 judge/__init__.py 读版本号——版本只写一处。"""
     text = (PKG / "judge" / "__init__.py").read_text(encoding="utf-8")
@@ -64,6 +73,91 @@ def read_version():
     if not m:
         die("judge/__init__.py 里找不到 __version__")
     return m.group(1)
+
+
+def push_via_api(owner, repo, token, desc, branch, tag):
+    """不用本机 git，直接经 REST 接口把工作区文件提交上去。
+
+    为什么要有这条路：某些机器上程序拉不起 git 进程（实测 WinError 5），
+    而 HTTPS 到 api.github.com 是通的——那就绕开 git，把文件、树、提交、引用一步步建出来。
+    代价：拿不到 git 的历史与合并能力，只能整树快照；适合首次发布与纯追加。
+
+    返回 (ok, 说明)。
+    """
+    import base64
+    import hashlib
+
+    def call(path, method="GET", payload=None):
+        last = ""
+        for attempt in range(4):
+            try:
+                st, body = api(path, method, token, payload)
+                if st < 500:
+                    return st, body
+                last = "HTTP %d" % st
+            except Exception as e:  # 断连/超时
+                last = "%s: %s" % (type(e).__name__, e)
+            time.sleep(2 + 3 * attempt)
+        return 0, {"message": "网络连续失败：" + last}
+
+    # 1. 逐文件建 blob（跳过 .git、缓存，以及 .github/workflows/ 下的文件）
+    #    .github/workflows/ 需要令牌额外带 workflow 权限，缺它建树一律 404（实测）；
+    #    跳过而不是中断：其余文件先发布，CI 文件等拿到带该权限的令牌再补一条提交。
+    tree, skipped = [], []
+    for f in sorted(PKG.rglob("*")):
+        if not f.is_file() or ".git" in f.parts or "__pycache__" in f.parts:
+            continue
+        rel = f.relative_to(PKG).as_posix()
+        if rel.startswith(".github/workflows/"):
+            skipped.append(rel)
+            continue
+        data = f.read_bytes()
+        sha = hashlib.sha1(b"blob %d\x00" % len(data) + data).hexdigest()
+        st, out = call("/repos/%s/%s/git/blobs" % (owner, repo), "POST",
+                       {"content": base64.b64encode(data).decode(), "encoding": "base64"})
+        if st not in (200, 201) or out.get("sha") != sha:
+            # 工作流文件需要额外的 workflow 权限，缺权限时 GitHub 只回 404
+            skipped.append(rel)
+            continue
+        tree.append({"path": rel, "mode": "100644", "type": "blob", "sha": sha})
+    if not tree:
+        return False, "一个文件都没上传成功"
+
+    # 2. 树 + 提交（父提交取当前分支头，没有就建根提交）
+    st, out = call("/repos/%s/%s/git/trees" % (owner, repo), "POST", {"tree": tree})
+    if st not in (200, 201):
+        return False, "建树失败 HTTP %s：%s" % (st, out.get("message", ""))
+    tree_sha = out["sha"]
+    st, head = call("/repos/%s/%s/git/ref/heads/%s" % (owner, repo, branch))
+    parents = [head["object"]["sha"]] if st == 200 and head.get("object") else []
+    st, cm = call("/repos/%s/%s/git/commits" % (owner, repo), "POST",
+                  {"message": desc, "tree": tree_sha, "parents": parents})
+    if st not in (200, 201):
+        return False, "建提交失败 HTTP %s：%s" % (st, cm.get("message", ""))
+    commit_sha = cm["sha"]
+
+    # 3. 分支引用：已有就改指，没有就新建
+    st, _ = call("/repos/%s/%s/git/refs/heads/%s" % (owner, repo, branch), "PATCH",
+                 {"sha": commit_sha, "force": True})
+    if st != 200:
+        call("/repos/%s/%s/git/refs" % (owner, repo), "POST",
+             {"ref": "refs/heads/" + branch, "sha": commit_sha})
+
+    # 4. 标签与 Release
+    call("/repos/%s/%s/git/refs" % (owner, repo), "POST",
+         {"ref": "refs/tags/" + tag, "sha": commit_sha})
+    st, rel = call("/repos/%s/%s/releases" % (owner, repo), "POST",
+                   {"tag_name": tag, "name": tag, "body": desc, "draft": False,
+                    "prerelease": False})
+
+    # 5. 回读核对：远端这个分支头必须就是我们刚建的提交
+    st, head = call("/repos/%s/%s/git/ref/heads/%s" % (owner, repo, branch))
+    ok = st == 200 and head.get("object", {}).get("sha") == commit_sha
+    note = "提交 %s，%d 个文件" % (commit_sha[:12], len(tree))
+    if skipped:
+        note += "；跳过 %d 个（需 workflow 权限）：%s" % (len(skipped), ", ".join(skipped))
+    note += "；Release " + (rel.get("html_url") or "HTTP %s" % st)
+    return ok, note
 
 
 def push_branch(package_dir, remote_url, branch, token=None, runner=None):
@@ -125,11 +219,21 @@ def main():
         print("OK   仓库已存在，复用 %s" % repo["html_url"])
     url = repo["clone_url"]
 
-    # 3. 身份（仓库内配置，不碰全局）
+    version = read_version()
+    tag = "v" + version
+
+    # 3. 优先用 git（有历史、可增量）；这台机器上程序拉不起 git 进程时，自动改走 REST 接口
+    if not git_available():
+        print("WARN 本机拉不起 git 进程，改走 REST 接口直推（整树快照）")
+        ok, note = push_via_api(owner, a.repo, token, a.desc, "master", tag)
+        print(("OK   " if ok else "FAIL ") + note)
+        print("\n仓库地址 https://github.com/%s/%s" % (owner, a.repo))
+        raise SystemExit(0 if ok else 1)
+
     git("config", "user.name", me.get("name") or owner)
     git("config", "user.email", "%s@users.noreply.github.com" % owner)
 
-    # 4. 推送：令牌只经 stdin 的临时 header 用一次，不写 .git/config
+    # 4. 推送：令牌只在这一句里出现，推完立刻用干净地址覆盖
     branch = git("rev-parse", "--abbrev-ref", "HEAD") or "main"
     if git("remote", check=False):
         git("remote", "set-url", "origin", url)
@@ -142,16 +246,15 @@ def main():
     print("OK   已推送 %s 分支" % branch)
 
     # 5. 版本标签与 Release（版本号取自 judge/__init__.py，唯一事实源）
-    version = read_version()
     st, tags = api("/repos/%s/%s/tags" % (owner, a.repo), token=token)
-    if not any(t.get("name") == "v" + version for t in (tags if isinstance(tags, list) else [])):
-        subprocess.run(["git", "tag", "-f", "v" + version], cwd=str(PKG), check=False)
-        tag_url = url.replace("https://", "https://x-access-token:%s@" % token)
-        subprocess.run(["git", "push", tag_url, "v" + version, "--force"],
+    if not any(t.get("name") == tag for t in (tags if isinstance(tags, list) else [])):
+        subprocess.run(["git", "tag", "-f", tag], cwd=str(PKG), check=False)
+        tag_url = url.replace("https://", "https://x-access-token:" + token + "@")
+        subprocess.run(["git", "push", tag_url, tag, "--force"],
                        cwd=str(PKG), capture_output=True, text=True)
         git("remote", "set-url", "origin", url)
         st3, rel = api("/repos/%s/%s/releases" % (owner, a.repo), "POST", token=token,
-                       payload={"tag_name": "v" + version, "name": "v" + version,
+                       payload={"tag_name": tag, "name": tag,
                                 "body": a.desc, "draft": False, "prerelease": False})
         print(("OK   Release %s" % rel.get("html_url")) if st3 in (200, 201)
               else "WARN Release 未建（HTTP %d），代码已推到位" % st3)
